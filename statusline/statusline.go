@@ -1,106 +1,136 @@
 package statusline
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"github.com/caligian/i3theme/config"
 	"regexp"
 	"strings"
 )
 
-var StatuslineColorClasses = [3]string{
+//////////////////////////////////////////////////
+type themeMap map[string][]string
+
+type Statusline struct {
+	Config   *config.Config
+	Pos      int
+	Colors   themeMap
+	Contents []string
+	Parsed   []string
+	Spaces   int
+}
+
+//////////////////////////////////////////////////
+var classes = [3]string{
 	"border",
 	"background",
 	"separator",
 }
 
-
-
-func (config *Config) ReadConfig(p string) *Config {
-	lines, err := os.ReadFile(p)
-	if err != nil {
-		panic(err)
-	}
-
-	config.lines = strings.Split(string(lines), "\n")
-	config.start = 0
-	config.end = len(config.lines)
-
-	return config
+var tabs = regexp.MustCompile("^[ ]*")
+var whitespace = regexp.MustCompile("[ ]+")
+var startRe = regexp.MustCompile("^[ ]*colors[ ]*[{]")
+var endRe = regexp.MustCompile("^[ ]*[}][ ]*$")
+var defaultTheme = themeMap{
+	"background":         {"#000000"},
+	"statusline":         {"#efefef"},
+	"focused_workspace":  {"#ff0000", "#000000", "#ffffff"},
+	"inactive_workspace": {"#282a2e", "#282a2e", "#ffffff"},
+	"active_workspace":   {"#1d1f21", "#1d1f21", "#c5c8c6"},
+	"urgent_workspace":   {"#2f343a", "#900000", "#ffffff"},
+	"binding_mode":       {"#d2d5d3", "#000000", "#ffffff"},
 }
 
-func (config *Config) ReadDefaultConfig() *Config {
-	return config.ReadConfig(ConfigPath)
+//////////////////////////////////////////////////
+func New(conf *config.Config) *Statusline {
+	return &Statusline{
+		Config:   conf,
+		Contents: []string{},
+		Colors:   themeMap{},
+		Parsed:   []string{},
+		Spaces:   8,
+	}
 }
 
-func (config *Config) ExtractStatusline() *Config {
-	var status = Statusline{
-		colors: map[string][]string{},
-		lines:  []string{},
-		start:  -1,
-		end:    -1,
-	}
-	var lines = config.lines
-	var end = len(lines)
-  // needs fixing
-	var status_re *regexp.Regexp = regexp.MustCompile("^status[.]([^ ]+) ([^$]+)")
+func (st *Statusline) String() string {
+	return strings.Join(st.Parsed, "\n")
+}
 
-	for i := 0; i < end; i++ {
-		l := lines[i]
-		matches := status_re.FindStringSubmatch(l)
+func (st *Statusline) Read() *Statusline {
+	conf := st.Config
+	confContents := conf.Contents
+	contents := st.Contents
+	procLine := func(s string) string {
+		line := whitespace.Split(s, -1)
+		line = line[1:]
+		name := line[0]
+		rest := config.CheckHex(line[1:])
 
-		if matches == nil {
-			continue
-		} else if status.start == -1 {
-			status.start = i
+		if t := tabs.FindStringIndex(s); t != nil {
+			st.Spaces = t[1] + 1
 		}
 
-		status_type := matches[1]
-		colors := checkHex(strings.Split(matches[2], " "))
-		status.colors[status_type] = colors
-	}
-
-	status.end = status.start + len(status.colors)
-	for i := status.start; i < status.end; i++ {
-		status.lines = append(status.lines, lines[i])
-	}
-
-	config.statusline = &status
-	return config
-}
-
-func (config *Config) ExtractClient() *Config {
-	var client = Client{
-		colors: map[string][]string{},
-		lines:  []string{},
-		start:  -1,
-		end:    -1,
-	}
-	var lines = config.lines
-	var end = len(lines)
-	var client_re *regexp.Regexp = regexp.MustCompile("^client[.]([^ ]+) ([^$]+)")
-
-	for i := 0; i < end; i++ {
-		l := lines[i]
-		matches := client_re.FindStringSubmatch(l)
-
-		if matches == nil {
-			continue
-		} else if client.start == -1 {
-			client.start = i
+		_, ok := defaultTheme[name]
+		if !ok {
+			panic(fmt.Sprintf(
+				"invalid statusline color form: %s %s\n",
+				name,
+				strings.Join(rest, " "),
+			))
 		}
 
-		client_type := matches[1]
-		colors := checkHex(strings.Split(matches[2], " "))
-		client.colors[client_type] = colors
+		st.Colors[name] = rest
+		return s
 	}
 
-	client.end = client.start + len(client.colors)
-	for i := client.start; i < client.end; i++ {
-		client.lines = append(client.lines, lines[i])
+	for i, v := range confContents {
+		if startRe.FindStringIndex(v) != nil {
+			st.Pos = i + 1
+			break
+		}
 	}
 
-	config.client = &client
-	return config
+	if st.Pos == -1 {
+		st.Colors = defaultTheme
+		return st
+	}
+
+	for i := st.Pos; i < len(confContents); i++ {
+		if ok := endRe.FindStringIndex(confContents[i]); ok != nil {
+			break
+		}
+		contents = append(contents, procLine(confContents[i]))
+	}
+
+	st.Contents = contents
+	return st
+}
+
+func (st *Statusline) Parse() *Statusline {
+	parsed := st.Parsed
+	for k, v := range defaultTheme {
+		if _, ok := st.Colors[k]; !ok {
+			st.Colors[k] = v
+		}
+	}
+
+	for k, v := range st.Colors {
+		parsed = append(parsed, fmt.Sprintf(
+			"%s%-20s %s",
+			strings.Repeat(" ", st.Spaces),
+			k,
+			strings.Join(v, " "),
+		))
+	}
+
+	st.Parsed = parsed
+	return st
+}
+
+func (st *Statusline) Sub() *config.Config {
+	return st.Config.Sub(st.Pos, st.Contents, st.Parsed)
+}
+
+func Do(conf *config.Config) *config.Config {
+  st := New(conf)
+  return st.Read().Parse().Sub()
 }

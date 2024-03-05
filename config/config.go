@@ -9,66 +9,28 @@ import (
 	"strings"
 )
 
-var ConfigPath = filepath.Join(os.Getenv("HOME"), ".config", "i3", "config")
-var StatuslineColorClasses = [3]string{
-	"border",
-	"background",
-	"separator",
-}
-var ClientColorClasses = [5]string{
-	"border",
-	"background",
-	"text",
-	"indicator",
-	"child_border",
-}
-
-
-type Statusline struct {
-	Start, End int
-	Contents   []string
-	Colors     map[string][]string
-	// background, statusline, separator string
-	// focused_workspace                 [3]string
-	// active_workspace                  [3]string
-	// inactive_workspace                [3]string
-	// urgent_workspace                  [3]string
-	// binding_mode                      [3]string
-}
-
-
-type Client struct {
-	Start, End int
-	Contents   []string
-	Colors     map[string][]string
-}
+type themeMap map[string][]string
 
 type Config struct {
-	Contents   []string
-	Client     *Client
-	Statusline *Statusline
-  Len int
+	Path     string
+	Contents []string
+	Len      int
 }
 
-func (statusline *Statusline) NewClient(contents []string) *Statusline {
-	return &Statusline{
-		Start:    -1,
-		End:      -1,
-		Contents: contents,
-		Colors:   map[string][]string{},
-	}
-}
-
-func ReadConfig() []string {
-	config, err := os.ReadFile(ConfigPath)
+func (conf *Config) Read() *Config {
+	dat, err := os.ReadFile(conf.Path)
 	if err != nil {
 		panic(err)
 	}
-	return strings.Split(string(config), "\n")
+	conf.Contents = strings.Split(string(dat), "\n")
+	conf.Len = len(conf.Contents)
+
+	return conf
 }
 
-func WriteConfig(s []string) {
-	err := os.WriteFile(ConfigPath, []byte(strings.Join(s, "\n")), 0644)
+func (conf *Config) Write() {
+	s := conf.Contents
+	err := os.WriteFile(conf.Path, []byte(strings.Join(s, "\n")), 0644)
 	if err != nil {
 		panic(err)
 	}
@@ -93,5 +55,49 @@ func CheckHex(s []string) []string {
 }
 
 func New() *Config {
-  return &Config{Contents: ReadConfig()}
+	return &Config{
+		Path: filepath.Join(os.Getenv("HOME"), ".config", "i3", "config"),
+	}
+}
+
+func (conf *Config) String() string {
+	return strings.Join(conf.Contents, "\n")
+}
+
+func (conf *Config) Sub(pos int, contents []string, parsed []string) *Config {
+	confContents := conf.Contents
+	contentsLen := len(contents)
+	parsedLen := len(parsed)
+	parsedHasMore := parsedLen > contentsLen
+
+	if parsedHasMore {
+		moreElems := parsed[contentsLen-1:]
+		for i := 0; i < contentsLen-1; i++ {
+			confContents[pos+i] = parsed[i]
+		}
+		confContents[pos+contentsLen-1] = strings.Join(moreElems, "\n")
+	} else {
+		for i, v := range parsed {
+			confContents[pos+i] = v
+		}
+	}
+
+	return conf
+}
+
+func Merge(defaultColors themeMap, colors themeMap) {
+	for k, v := range colors {
+		_, ok := defaultColors[k]
+		if !ok {
+			panic(fmt.Sprintf("invalid client theme form for %s %s\n", k, v))
+		}
+		colors[k] = CheckHex(v)
+	}
+
+  for k, v := range defaultColors {
+    _, ok := colors[k]
+    if !ok {
+      colors[k] = v
+    }
+  }
 }
